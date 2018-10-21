@@ -7,17 +7,6 @@
  * License  : GNU General Public License v3+
 *******************************************************************************/
 
-
-
-/* HC-SR04 Ping / Range finder wiring:
- * -----------------------------------
- * Particle - HC-SR04
- *      GND - GND
- *      VIN - VCC
- *       D4 - TRIG
- *       D5 - ECHO
- */
-
 // includings of 3rd party libraries
 // @todo: check necessary includings
 #include "application.h"
@@ -27,7 +16,7 @@
  // system defines
  // @todo: check necessary defines
 #define DHTTYPE  DHT22              // Sensor type DHT11/21/22/AM2301/AM2302
-#define DHTPIN   D1           	    // Digital pin for communications
+#define DHTPIN   D3           	    // Digital pin for communications
 #define DHT_SAMPLE_INTERVAL   10000  // Sample every ten seconds
 
 /*
@@ -43,10 +32,10 @@ void dht_wrapper(); // must be declared before the lib initialization
 PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 
 // Select external Antenna
-STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
+//STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 
 // globals
-unsigned int DHTnextSampleTime;	    // Next time we want to start sample
+int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
 int n;                              // counter
 String sensorStatus = "Initialization";
@@ -54,7 +43,36 @@ String sensorStatus = "Initialization";
 String firmwareVersion = "0.1.0";
 double dHumidity = 0.0;
 double dTemperature = 0.0;
-int pushButton = D0;
+
+
+const int sensorHight1 = 75;  // hight of mounted sensor 1 in cm
+const int sensorHight2 = 75;  // hight of mounted sensor 2 in cm
+const int vehicleHight = 30;  // hight of vehicle to detect in cm
+
+bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
+bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
+
+int vehicleInGarage = 1;
+
+// 1 = inside garage
+// 2 = transition
+// 3 = outside in garage
+
+// declaration of I/Os
+int garageTrigger = D0;       // garage door trigger relay
+int usTrigger = D4;   // trigger signal for ultrasonic sensors
+int usEcho1 = D5;     // echo signal for ultrasonic sensor 1
+int usEcho2 = D6;     // echo signal for ultrasonic sensor 2
+int statusLED = D7;   // status LED for signalling if vehcile detected with sensor 1
+int statusLEDParticle = D1;
+
+// Declaration of time variables
+unsigned long lastSync = millis();                    // last synchronization of time in internet
+unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
+unsigned long lastNotification = millis();            //
+unsigned long threshold (15 * 60 * 1000);             // 15 minutes
+unsigned long lastCheck = millis();                   //
+unsigned long thresholdCheck (5 * 1000); // 5 seconds                    // one ultrasonic measurement every second
 
 
 // Setup
@@ -62,8 +80,8 @@ void setup() {
 
   // serial communications
   Serial.begin(9600);
-  // Wait for a USB serial connection for up to 5 seconds
-  waitFor(Serial.isConnected, 5000);
+  // Wait for a USB serial connection for up to 3 seconds
+  //waitFor(Serial.isConnected, 3000);
   Serial.printlnf("System version: %s", System.version().c_str());
   Serial.printlnf("Firmware version: %s", firmwareVersion.c_str());
   Serial.println("---------------");
@@ -74,9 +92,21 @@ void setup() {
   Particle.variable("Humidity", &dHumidity, DOUBLE);
 
   // Definition of I/O-Pins
-  pinMode(pushButton, OUTPUT);
+  pinMode(garageTrigger, OUTPUT);
+  pinMode(statusLED, OUTPUT);
+  pinMode(statusLEDParticle, OUTPUT);
+
+  // setting trigger pin
+  pinMode(usTrigger, OUTPUT);
+  digitalWriteFast(usTrigger, LOW);
+
+  // setting echo pins
+  pinMode(usEcho1, INPUT);
+  pinMode(usEcho2, INPUT);
 
   DHTnextSampleTime = 0;  // Start the first sample immediately
+
+  digitalWrite(garageTrigger, LOW);
 
 }
 
@@ -196,149 +226,205 @@ void readTempHumid() {
 
 }
 
+void triggerGarage() {
+
+  digitalWrite(garageTrigger, HIGH);
+  delay(400);
+  digitalWrite(garageTrigger, LOW);
+
+}
+
+
+void takeMeasurements() {
+
+  if (detectVehicle(1) == true) {
+
+    //Serial.println("Vehicle detected by sensor 1");
+    digitalWrite(statusLED, HIGH);
+    sensorDetect1 = true;
+
+  } else {
+
+    digitalWrite(statusLED, LOW);
+    sensorDetect1 = false;
+
+  }
+
+  if (detectVehicle(2) == true) {
+
+    //Serial.println("Vehicle detected by sensor 2");
+    sensorDetect2 = true;
+
+  } else {
+
+    sensorDetect2 = false;
+
+  }
+
+  delay(500);
+
+}
+
+
+
+
 
 // loop
 void loop() {
 
   // read temperature and humidity of sensor
-  // readTempHumid();
+  readTempHumid();
 
-  // trigger garage door
-  //digitalWrite(pushButton, HIGH);          // sets the LED on
-  //delay(300);                       // waits for 200mS
-  //digitalWrite(pushButton, LOW);           // sets the LED off
-  //delay(10000);                       // waits for 200mS
+  takeMeasurements();
 
-  // trigger echo measurement
-  // Trigger pin, Echo pin, delay (ms), visual=true|info=false
-  //ping(D5, D6, mm, true);
+  if (sensorDetect1 == true && sensorDetect2 == false && vehicleInGarage > 1) {
+    // vehicle inside
 
-  //Serial.printf("Distance: %i mm", ping(D5, D6, 3, true));
-  //Serial.println();
+      //triggerGarage();
+      Serial.println("vehicle inside");
+      vehicleInGarage--;
 
-  Serial.printf("Distance 1: %i mm", measureDistance(1));
-  Serial.println();
-  Serial.printf("Distance 2: %i mm", measureDistance(2));
-  Serial.println();
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
+    // vehicle in transition
 
-  delay(500); // slow down the output
+      Serial.println("vehicle in transition");
+      vehicleInGarage++;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
+    // vehicle in transition
+
+      Serial.println("vehicle in transition");
+      vehicleInGarage--;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
+    // vehicle outside
+
+    triggerGarage();
+    Serial.println("vehicle outside");
+    vehicleInGarage++;
+
+  } else {
+
+
+  }
+
+  updateTime();
+
+  checkStatus();
+
+
+
 
 
 }
 
-int measureDistance(int sensorNumber) {
+/*******************************************************************************
+ * Function Name  : CheckStatus
+ * Description    : Checks if Particle cloud is connected
+ * Input          : None
+ * Output         : Blue flashing LED every 5 seconds
+ * Return         : None
+ *******************************************************************************/
+void checkStatus() {
 
-  switch (sensorNumber) {
+  if ((Particle.connected() == true) && (millis() - lastCheck > thresholdCheck)) {
 
-    case 1:
-      // measurement of sensor 1
-      return ping(D5, D6, 3, true);
-      break;
-
-    case 2:
-      // measurement of sensor 1
-      return ping(D3, D4, 3, true);
-      break;
-
-    default:
-      return 0;
+    digitalWrite(statusLEDParticle, HIGH);
+    delay(100);
+    digitalWrite(statusLEDParticle, LOW);
+    lastCheck = millis();
 
   }
 
 }
 
 
-int ping(pin_t trig_pin, pin_t echo_pin, int unit, bool info) {
+/*******************************************************************************
+ * Function Name  : updateTime
+ * Description    : Request time synchronization from the Particle Cloud once a day
+ * Input          : None
+ * Output         : None
+ * Return         : None
+ *******************************************************************************/
+void updateTime() {
 
-    //uint32_t speedOfSound, duration, inches, cm, meter;
+    if (millis() - lastSync > ONE_DAY_MILLIS) {
 
-    uint32_t mm, cm, meter, timeMeasurement, timeDistance;
-    float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
-
-    //static bool init = false;
-
-    //if (!init) {
-
-        // setting trigger pin
-        pinMode(trig_pin, OUTPUT);
-        digitalWriteFast(trig_pin, LOW);
-
-        // setting echo pin
-        pinMode(echo_pin, INPUT);
-        delay(50);
-        //init = true;
-
-    //}
-
-    // trigger the sensor by sending a HIGH pulse of 10 or more microseconds
-    digitalWriteFast(trig_pin, HIGH);
-    delayMicroseconds(10);
-    digitalWriteFast(trig_pin, LOW);
-
-    // wait for response
-    timeMeasurement = pulseIn(echo_pin, HIGH);
-    timeDistance = timeMeasurement / 2;
-
-
-    // Ausbreitungsgeschwindigkeit (in Luft) = 331,5 + (0,6 * Temp°C) speedOfSound = 331,5 + ( 0.6 * dTemperature);
-
-    // Convert the time into a distance
-    // Sound travels at 1130 ft/s (73.746 µs/inch)
-    // or 340 m/s (29 µs/cm), out and back so divide by 2
-    // Ref: http://www.parallax.com/dl/docs/prod/acc/28015-PING-v1.3.pdf
-    //inches = duration / 74 / 2;
-    //cm = duration / 29 / 2;
-    //meter = duration / 0.034 / 2;
-
-    meter = speedOfSound * timeDistance * pow(10, -6);
-    cm = speedOfSound * timeDistance * pow(10,-4);
-    mm = speedOfSound * timeDistance * pow(10,-3);
-
-    if (info) { // Visual Output
-
-        //Serial.printf("%2d:", inches);
-        //for(int x=0;x<inches;x++) Serial.print("#");
-        //Serial.println();
-
-    } else { // Informational Output
-
-        // Serial.printlnf("%6d in / %6d cm / %6d µs / %6d v", inches, cm, duration, speedOfSound);
-        //Serial.printlnf("Distance: %s", cmDistance.toString().c_str());
-
-        Serial.printf("SoS: %f m/s", speedOfSound);
-        Serial.println();
-        Serial.printf("Distance: %i m", meter);
-        Serial.println();
-        Serial.printf("Distance: %i cm", cm);
-        Serial.println();
-        Serial.printf("Distance: %i mm", mm);
-        Serial.println();
+    // Request time synchronization from the Particle Cloud
+    Particle.syncTime();
+    Serial.printf("Time updated at %s...", Time.timeStr().c_str());
+    lastSync = millis();
 
     }
 
+}
 
 
-    switch (unit) {
+bool detectVehicle(int sensorNumber) {
 
-      case 1:
-        // statements
-        return meter;
-        break;
+  int distance;
 
-      case 2:
-        // statements
-        return cm;
-        break;
+  if (sensorNumber == 1) {
 
-      case 3:
-        // statements
-        return mm;
-        break;
+    distance = sensorHight1 - measureDistance(sensorNumber);
 
-      default:
-        // statements
-        return meter;
-    }
 
+  } else if (sensorNumber == 2) {
+
+    distance = sensorHight2 - measureDistance(sensorNumber);
+
+  }
+
+  if (distance >= vehicleHight) {
+
+    return true;
+
+  } else {
+
+    return false;
+
+  }
+
+}
+
+
+int measureDistance(int sensorNumber) {
+
+  uint32_t distance, timeMeasurement, timeDistance;
+
+  // Ausbreitungsgeschwindigkeit (in Luft) = 331,5 + (0,6 * Temp°C) speedOfSound = 331,5 + ( 0.6 * dTemperature);
+  float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
+
+  // trigger the sensor by sending a HIGH pulse of 10 or more microseconds
+  digitalWrite(usTrigger, LOW);
+  delayMicroseconds(3);
+
+  // critical, time-sensitive code starts
+  noInterrupts();
+
+  digitalWriteFast(usTrigger, HIGH);
+  delayMicroseconds(10);
+  digitalWriteFast(usTrigger, LOW);
+
+  if (sensorNumber == 1) {
+
+    timeMeasurement = pulseIn(usEcho1, HIGH);
+
+  } else if (sensorNumber == 2) {
+
+    timeMeasurement = pulseIn(usEcho2, HIGH);
+
+  }
+
+  // critical, time-sensitive code ends
+  interrupts();
+
+  timeDistance = timeMeasurement / 2;
+  distance = speedOfSound * timeDistance * pow(10,-4); // in cm
+
+
+  // calclulate distance in mm
+  return distance;
+  delay(50);
 
 }
