@@ -11,13 +11,12 @@
 // @todo: check necessary includings
 #include "application.h"
 #include "PietteTech_DHT.h" // Temperature, Humidity Sensor Libray
-#include "math.h"
 
  // system defines
  // @todo: check necessary defines
-#define DHTTYPE  DHT22              // Sensor type DHT11/21/22/AM2301/AM2302
+#define DHTTYPE  AM2302              // Sensor type DHT11/21/22/AM2301/AM2302
 #define DHTPIN   D3           	    // Digital pin for communications
-#define DHT_SAMPLE_INTERVAL   10000  // Sample every ten seconds
+#define DHT_SAMPLE_INTERVAL   600000  // Sample every ten minutes
 
 /*
  * NOTE: Use of callback_wrapper has been deprecated but left in this example
@@ -37,12 +36,11 @@ PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 // globals
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
-int n;                              // counter
 String sensorStatus = "Initialization";
 // Version MAJOR.MINOR.PATCH
 String firmwareVersion = "0.1.0";
-double dHumidity = 0.0;
-double dTemperature = 0.0;
+double dHumidity = 40.0;
+double dTemperature = 20.0;
 
 
 const int sensorHight1 = 75;  // hight of mounted sensor 1 in cm
@@ -52,19 +50,15 @@ const int vehicleHight = 30;  // hight of vehicle to detect in cm
 bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
 bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
 
-int vehicleInGarage = 1;
-
-// 1 = inside garage
-// 2 = transition
-// 3 = outside in garage
+int vehicleInGarage = 0;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
 
 // declaration of I/Os
-int garageTrigger = D0;       // garage door trigger relay
-int usTrigger = D4;   // trigger signal for ultrasonic sensors
-int usEcho1 = D5;     // echo signal for ultrasonic sensor 1
-int usEcho2 = D6;     // echo signal for ultrasonic sensor 2
-int statusLED = D7;   // status LED for signalling if vehcile detected with sensor 1
-int statusLEDParticle = D1;
+const int garageTrigger = D0;       // garage door trigger relay
+const int usTrigger = D4;   // trigger signal for ultrasonic sensors
+const int usEcho1 = D5;     // echo signal for ultrasonic sensor 1
+const int usEcho2 = D6;     // echo signal for ultrasonic sensor 2
+const int statusLED = D7;   // status LED for signalling if vehcile detected with sensor 1
+const int statusLEDParticle = D1;
 
 // Declaration of time variables
 unsigned long lastSync = millis();                    // last synchronization of time in internet
@@ -73,6 +67,18 @@ unsigned long lastNotification = millis();            //
 unsigned long threshold (15 * 60 * 1000);             // 15 minutes
 unsigned long lastCheck = millis();                   //
 unsigned long thresholdCheck (5 * 1000); // 5 seconds                    // one ultrasonic measurement every second
+
+
+// Variables will change:
+int ledState = LOW;             // ledState used to set the LED
+
+// Generally, you should use "unsigned long" for variables that hold time
+// The value will quickly become too large for an int to store
+unsigned long previousMillis = 0;        // will store last time LED was updated
+unsigned long previousMillisUs = 0;        // will store last time ultrasonic sensors were updated
+
+// constants won't change:
+//const long ledInterval = 100;           // interval at which to blink (milliseconds)
 
 
 // Setup
@@ -108,6 +114,70 @@ void setup() {
 
   digitalWrite(garageTrigger, LOW);
 
+  takeMeasurements(1000);
+
+  if (sensorDetect1 == true && sensorDetect2 == false) {
+    // vehicle inside
+
+    Serial.println("vehicle inside");
+    vehicleInGarage = 1;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == false) {
+
+    Serial.println("vehicle outside");
+    vehicleInGarage = 3;
+
+  }
+
+}
+
+
+// loop
+void loop() {
+
+  // read temperature and humidity of sensor
+  readTempHumid();
+
+  // takes ultrasonic measurements (int sample time in ms)
+  takeMeasurements(1000);
+
+  if (sensorDetect1 == true && sensorDetect2 == false && vehicleInGarage > 1) {
+    // vehicle inside
+
+      //triggerGarage();
+      Serial.println("vehicle inside");
+      vehicleInGarage--;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
+    // vehicle in transition
+
+      Serial.println("vehicle in transition");
+      vehicleInGarage++;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
+    // vehicle in transition
+
+      Serial.println("vehicle in transition");
+      vehicleInGarage--;
+
+  } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
+    // vehicle outside
+
+    triggerGarage();
+    Serial.println("vehicle outside");
+    vehicleInGarage++;
+
+  } else {
+
+
+  }
+
+  // updates the time from the internet if necessary
+  updateTime();
+
+  // checks status if patricle is connected to cloud (int blink frequency in ms)
+  checkStatus(500);
+
 }
 
 
@@ -132,8 +202,7 @@ void readTempHumid() {
   if (millis() > DHTnextSampleTime) {
     if (!bDHTstarted) {		// start the sample
       Serial.print("\n\n");
-      Serial.print(n);
-      Serial.print(": Retrieving information from sensor: ");
+      Serial.print("Retrieving information from sensor. ");
       DHT.acquire();
       bDHTstarted = true;
     }
@@ -216,7 +285,6 @@ void readTempHumid() {
     Serial.print("Dew Point Slow (°C): ");
     Serial.println(DHT.getDewPointSlow());
 
-    n++;  // increment counter
     bDHTstarted = false;  // reset the sample flag so we can take another
     DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
 
@@ -235,33 +303,42 @@ void triggerGarage() {
 }
 
 
-void takeMeasurements() {
+void takeMeasurements(int interval) {
 
-  if (detectVehicle(1) == true) {
+  if (millis() - previousMillisUs >= interval) {
 
-    //Serial.println("Vehicle detected by sensor 1");
-    digitalWrite(statusLED, HIGH);
-    sensorDetect1 = true;
+    // save the last time you blinked the LED
+    previousMillisUs = millis();
 
-  } else {
+    if (detectVehicle(1) == true) {
 
-    digitalWrite(statusLED, LOW);
-    sensorDetect1 = false;
+      //Serial.println("Vehicle detected by sensor 1");
+      digitalWrite(statusLED, HIGH);
+      sensorDetect1 = true;
+
+    } else {
+
+      digitalWrite(statusLED, LOW);
+      sensorDetect1 = false;
+
+    }
+
+    if (detectVehicle(2) == true) {
+
+      //Serial.println("Vehicle detected by sensor 2");
+      sensorDetect2 = true;
+
+    } else {
+
+      sensorDetect2 = false;
+
+    }
+
+    //delay(500);
 
   }
 
-  if (detectVehicle(2) == true) {
 
-    //Serial.println("Vehicle detected by sensor 2");
-    sensorDetect2 = true;
-
-  } else {
-
-    sensorDetect2 = false;
-
-  }
-
-  delay(500);
 
 }
 
@@ -269,54 +346,6 @@ void takeMeasurements() {
 
 
 
-// loop
-void loop() {
-
-  // read temperature and humidity of sensor
-  readTempHumid();
-
-  takeMeasurements();
-
-  if (sensorDetect1 == true && sensorDetect2 == false && vehicleInGarage > 1) {
-    // vehicle inside
-
-      //triggerGarage();
-      Serial.println("vehicle inside");
-      vehicleInGarage--;
-
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
-    // vehicle in transition
-
-      Serial.println("vehicle in transition");
-      vehicleInGarage++;
-
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
-    // vehicle in transition
-
-      Serial.println("vehicle in transition");
-      vehicleInGarage--;
-
-  } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
-    // vehicle outside
-
-    triggerGarage();
-    Serial.println("vehicle outside");
-    vehicleInGarage++;
-
-  } else {
-
-
-  }
-
-  updateTime();
-
-  checkStatus();
-
-
-
-
-
-}
 
 /*******************************************************************************
  * Function Name  : CheckStatus
@@ -325,16 +354,29 @@ void loop() {
  * Output         : Blue flashing LED every 5 seconds
  * Return         : None
  *******************************************************************************/
-void checkStatus() {
+void checkStatus(int interval) {
 
-  if ((Particle.connected() == true) && (millis() - lastCheck > thresholdCheck)) {
+  if ((millis() - previousMillis >= interval) && !Particle.connected()) {
 
-    digitalWrite(statusLEDParticle, HIGH);
-    delay(100);
-    digitalWrite(statusLEDParticle, LOW);
-    lastCheck = millis();
+    // save the last time you blinked the LED
+    previousMillis = millis();
+
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW) {
+
+      ledState = HIGH;
+
+    } else {
+
+      ledState = LOW;
+
+    }
+
+    // set the LED with the ledState of the variable:
+    digitalWrite(statusLEDParticle, ledState);
 
   }
+
 
 }
 
@@ -393,14 +435,15 @@ int measureDistance(int sensorNumber) {
   uint32_t distance, timeMeasurement, timeDistance;
 
   // Ausbreitungsgeschwindigkeit (in Luft) = 331,5 + (0,6 * Temp°C) speedOfSound = 331,5 + ( 0.6 * dTemperature);
-  float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
+  //float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
+  double speedOfSound = 331.5 + 0.6 * dTemperature; // 22 °C
 
   // trigger the sensor by sending a HIGH pulse of 10 or more microseconds
   digitalWrite(usTrigger, LOW);
   delayMicroseconds(3);
 
   // critical, time-sensitive code starts
-  noInterrupts();
+  //noInterrupts();
 
   digitalWriteFast(usTrigger, HIGH);
   delayMicroseconds(10);
@@ -417,14 +460,17 @@ int measureDistance(int sensorNumber) {
   }
 
   // critical, time-sensitive code ends
-  interrupts();
+  //interrupts();
 
   timeDistance = timeMeasurement / 2;
   distance = speedOfSound * timeDistance * pow(10,-4); // in cm
 
+  //Serial.printf("Distance %i",sensorNumber);
+  //Serial.printf(": %i",distance);
+  //Serial.println();
 
-  // calclulate distance in mm
+  // calclulate distance in cm
   return distance;
-  delay(50);
+  delayMicroseconds(50);
 
 }
