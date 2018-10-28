@@ -1,29 +1,27 @@
 /*******************************************************************************
  * Project  : GarageController
- * Compiler : Particle Photon
- * Verion   : 0.8.0-rc.10
- * Date     : 15.10.2018
+ * Hardware : Particle Photon
+ * Date     : 28.10.2018
  * Author   : Tim Hornikel
  * License  : GNU General Public License v3+
 *******************************************************************************/
 
 // includings of 3rd party libraries
 // @todo: check necessary includings
-#include "application.h"
 #include "PietteTech_DHT.h" // Temperature, Humidity Sensor Libray
 
- // system defines
- // @todo: check necessary defines
+// system defines
+// @todo: check necessary defines
 #define DHTTYPE  AM2302              // Sensor type DHT11/21/22/AM2301/AM2302
-#define DHTPIN   D3           	    // Digital pin for communications
+#define DHTPIN   D2           	    // Digital pin for communications
 #define DHT_SAMPLE_INTERVAL   600000  // Sample every ten minutes
 
-/*
- * NOTE: Use of callback_wrapper has been deprecated but left in this example
- *       to confirm backwards compabibility.  Look at DHT_2sensor for how
- *       to write code without the callback_wrapper
- */
-// declaration
+/*******************************************************************************
+ * Description    : Use of callback_wrapper has been deprecated but left in this example to confirm backwards compatibility.
+ * NOTE           : This wrapper is in charge of calling must be defined like this for the lib work
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
 void dht_wrapper(); // must be declared before the lib initialization
 
 // Lib instantiate
@@ -31,57 +29,55 @@ void dht_wrapper(); // must be declared before the lib initialization
 PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 
 // Select external Antenna
-//STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
+STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 
 // globals
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
 String sensorStatus = "Initialization";
-// Version MAJOR.MINOR.PATCH
-String firmwareVersion = "0.1.0";
+String firmwareVersion = "0.2.0";   // Version MAJOR.MINOR.PATCH
 double dHumidity = 40.0;
 double dTemperature = 20.0;
 
 
-const int sensorHight1 = 75;  // hight of mounted sensor 1 in cm
-const int sensorHight2 = 75;  // hight of mounted sensor 2 in cm
-const int vehicleHight = 30;  // hight of vehicle to detect in cm
+const int sensorHight1 = 13;  // hight of mounted sensor 1 in cm
+const int sensorHight2 = 13;  // hight of mounted sensor 2 in cm
+const int vehicleHight = 5;  // hight of vehicle to detect in cm
 
 bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
 bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
 
 int vehicleInGarage = 0;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
+int garageDoorState = 0;      // 0 = initialization, 1 = closed, 2 = transition, 3 = open
 
 // declaration of I/Os
-const int garageTrigger = D0;       // garage door trigger relay
-const int usTrigger = D4;   // trigger signal for ultrasonic sensors
-const int usEcho1 = D5;     // echo signal for ultrasonic sensor 1
-const int usEcho2 = D6;     // echo signal for ultrasonic sensor 2
-const int statusLED = D7;   // status LED for signalling if vehcile detected with sensor 1
-const int statusLEDParticle = D1;
+const int garageTrigger = A0;         // garage door trigger relay
+const int usTrigger = D3;             // trigger signal for ultrasonic sensors
+const int usEcho1 = D4;               // echo signal for ultrasonic sensor 1
+const int usEcho2 = D5;               // echo signal for ultrasonic sensor 2
+const int doorSensor1 = D0;           // garage door sensor1 (HIGH = door open)
+const int doorSensor2 = D1;           // garage door sensor2 (HIGH = door closed)
+const int statusLEDParticle = D6;     // status LED for signalling Particle Cloud errors
+const int statusLEDVehicle = D7;      // status LED for signalling if vehcile detected with sensor 1
+
 
 // Declaration of time variables
 unsigned long lastSync = millis();                    // last synchronization of time in internet
 unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
-unsigned long lastNotification = millis();            //
-unsigned long threshold (15 * 60 * 1000);             // 15 minutes
-unsigned long lastCheck = millis();                   //
-unsigned long thresholdCheck (5 * 1000); // 5 seconds                    // one ultrasonic measurement every second
 
-
-// Variables will change:
-int ledState = LOW;             // ledState used to set the LED
 
 // Generally, you should use "unsigned long" for variables that hold time
 // The value will quickly become too large for an int to store
-unsigned long previousMillis = 0;        // will store last time LED was updated
+unsigned long previousMillisVehicle = 0;        // will store last time LED was updated
 unsigned long previousMillisUs = 0;        // will store last time ultrasonic sensors were updated
 
-// constants won't change:
-//const long ledInterval = 100;           // interval at which to blink (milliseconds)
 
 
-// Setup
+/*******************************************************************************
+ * Description    : Setup
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
 void setup() {
 
   // serial communications
@@ -93,13 +89,18 @@ void setup() {
   Serial.println("---------------");
 
   // particle variables
-  Particle.variable("Status", sensorStatus);
+  Particle.variable("TempStatus", sensorStatus);
   Particle.variable("Temperature", &dTemperature, DOUBLE);
   Particle.variable("Humidity", &dHumidity, DOUBLE);
+  Particle.variable("garageDoorState", garageDoorState);
+  Particle.variable("vehicleState", vehicleInGarage);
+
+  // particle functions
+  Particle.function("garageTrigger", triggerGarage);
 
   // Definition of I/O-Pins
   pinMode(garageTrigger, OUTPUT);
-  pinMode(statusLED, OUTPUT);
+  pinMode(statusLEDVehicle, OUTPUT);
   pinMode(statusLEDParticle, OUTPUT);
 
   // setting trigger pin
@@ -110,21 +111,26 @@ void setup() {
   pinMode(usEcho1, INPUT);
   pinMode(usEcho2, INPUT);
 
+  //setting door switch pins
+  pinMode(doorSensor1, INPUT_PULLDOWN);
+  pinMode(doorSensor2, INPUT_PULLDOWN);
+
   DHTnextSampleTime = 0;  // Start the first sample immediately
 
+  // setting garage trigger to low during initialization
   digitalWrite(garageTrigger, LOW);
 
-  takeMeasurements(1000);
+  // take first measurements
+  takeMeasurements(500);
 
   if (sensorDetect1 == true && sensorDetect2 == false) {
     // vehicle inside
 
-    Serial.println("vehicle inside");
     vehicleInGarage = 1;
 
   } else if (sensorDetect1 == false && sensorDetect2 == false) {
+    // vehicle outside
 
-    Serial.println("vehicle outside");
     vehicleInGarage = 3;
 
   }
@@ -132,39 +138,105 @@ void setup() {
 }
 
 
-// loop
+/*******************************************************************************
+ * Description    : Loop
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
 void loop() {
 
-  // read temperature and humidity of sensor
+  // checks status if patricle is connected to cloud
+  checkCloudStatus();
+
+  // reads temperature and humidity of sensor
   readTempHumid();
 
+  // reads garage door state
+  readGarageDoorState();
+
+  // reads vehicle state
+  readVehicleState();
+
+  // updates the time from the internet if necessary
+  updateTime();
+
+}
+
+
+/*******************************************************************************
+ * Description    : Reads the state of the garage door
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void readGarageDoorState() {
+
+  int doorSwitchOpen = digitalRead(doorSensor1);
+  int doorSwitchClosed = digitalRead(doorSensor2);
+
+  if (doorSwitchOpen == HIGH && doorSwitchClosed == LOW && garageDoorState > 1) {
+    // garage door open
+
+    garageDoorState = 1; // 1 = garage door open
+    Serial.println("Garage door open");
+
+  } else if (doorSwitchOpen == LOW && doorSwitchClosed == LOW && garageDoorState != 2) {
+    // garage door in transition
+
+    garageDoorState = 2; // 2 = garage door in transition
+    Serial.println("Garage door in transition");
+
+  } else if (doorSwitchOpen == LOW && doorSwitchClosed == HIGH && garageDoorState < 3) {
+    // garage door closed
+
+    garageDoorState = 3; // 3 = garage door closed
+    Serial.println("Garage door closed");
+
+  } else if (doorSwitchOpen == HIGH && doorSwitchClosed == HIGH && garageDoorState > 0) {
+    // initialization
+
+    garageDoorState = 0; // 0 = initialization
+    // Error treatment to be defined
+    Serial.println("Garage door failure!");
+
+  }
+
+}
+
+
+/*******************************************************************************
+ * Description    : Reads the state of vehicle presence
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void readVehicleState() {
+
   // takes ultrasonic measurements (int sample time in ms)
-  takeMeasurements(1000);
+  takeMeasurements(500);
 
   if (sensorDetect1 == true && sensorDetect2 == false && vehicleInGarage > 1) {
     // vehicle inside
 
-      //triggerGarage();
-      Serial.println("vehicle inside");
+      //triggerGarage(0); <-- only if garage door shall close when vehcile is inside
+      Serial.println("Vehicle inside");
       vehicleInGarage--;
 
   } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
     // vehicle in transition
 
-      Serial.println("vehicle in transition");
+      Serial.println("Vehicle in transition");
       vehicleInGarage++;
 
   } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
     // vehicle in transition
 
-      Serial.println("vehicle in transition");
+      Serial.println("Vehicle in transition");
       vehicleInGarage--;
 
   } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
     // vehicle outside
 
-    triggerGarage();
-    Serial.println("vehicle outside");
+    triggerGarage("close");
+    Serial.println("Vehicle outside");
     vehicleInGarage++;
 
   } else {
@@ -172,30 +244,190 @@ void loop() {
 
   }
 
-  // updates the time from the internet if necessary
-  updateTime();
+}
 
-  // checks status if patricle is connected to cloud (int blink frequency in ms)
-  checkStatus(500);
+
+/*******************************************************************************
+ * Description    : Takes ultrasonic measurements for both sensors
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void takeMeasurements(int interval) {
+
+  if (millis() - previousMillisUs >= interval) {
+
+    // save the last time a measurement was taken
+    previousMillisUs = millis();
+
+    if (detectVehicle(1) == true) {
+
+      digitalWrite(statusLEDVehicle, HIGH);
+      sensorDetect1 = true;
+
+    }  else {
+
+      digitalWrite(statusLEDVehicle, LOW);
+      sensorDetect1 = false;
+
+    }
+
+    if (detectVehicle(2) == true) {
+
+      //Serial.println("Vehicle detected by sensor 2");
+      sensorDetect2 = true;
+
+    } else {
+
+      sensorDetect2 = false;
+
+    }
+
+    //delay(500);
+
+  }
+
+
 
 }
 
 
-/*
- * NOTE:  Use of callback_wrapper has been deprecated but left in this example
- * to confirm backwards compatibility.
- */
- // This wrapper is in charge of calling
- // must be defined like this for the lib work
+/*******************************************************************************
+ * Description    : Checks the presence of a vehcile in the garage
+ * Input          : Sensor Number
+ * Output         : TRUE (vehicle detected), FALSE (no vehicle detected)
+ *******************************************************************************/
+bool detectVehicle(int sensorNumber) {
+
+  int distance;
+
+  if (sensorNumber == 1) {
+
+    distance = sensorHight1 - measureDistance(sensorNumber);
+
+  } else if (sensorNumber == 2) {
+
+    distance = sensorHight2 - measureDistance(sensorNumber);
+
+  }
+
+  if (distance >= vehicleHight) {
+
+    return true;
+
+  } else {
+
+    return false;
+
+  }
+
+}
+
+
+/*******************************************************************************
+ * Description    : Measures the Distance to an object using ultrasonic sensors
+ * Input          : Sensor Number
+ * Output         : Distance (cm)
+ *******************************************************************************/
+int measureDistance(int sensorNumber) {
+
+  uint32_t distance, timeMeasurement, timeDistance;
+
+  // Ausbreitungsgeschwindigkeit (in Luft) = 331,5 + (0,6 * Temp°C) speedOfSound = 331,5 + ( 0.6 * dTemperature);
+  //float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
+  double speedOfSound = 331.5 + 0.6 * dTemperature; // 22 °C
+
+  // trigger the sensor by sending a HIGH pulse of 10 or more microseconds
+  digitalWrite(usTrigger, LOW);
+  delayMicroseconds(3);
+
+  // critical, time-sensitive code starts
+  //noInterrupts();
+
+  digitalWriteFast(usTrigger, HIGH);
+  delayMicroseconds(10);
+  digitalWriteFast(usTrigger, LOW);
+
+  if (sensorNumber == 1) {
+
+    timeMeasurement = pulseIn(usEcho1, HIGH);
+
+  } else if (sensorNumber == 2) {
+
+    timeMeasurement = pulseIn(usEcho2, HIGH);
+
+  }
+
+  // critical, time-sensitive code ends
+  //interrupts();
+
+  timeDistance = timeMeasurement / 2;
+  distance = speedOfSound * timeDistance * pow(10,-4); // in cm
+
+  //Serial.printf("Distance %i",sensorNumber);
+  //Serial.printf(": %i",distance);
+  //Serial.println();
+
+  // calclulate distance in cm
+  return distance;
+  delayMicroseconds(50);
+
+}
+
+
+/*******************************************************************************
+ * Description    : Trigger for opening / closing the garage door
+ * Input          : open / close
+ * Output         : 1 = opening, 0 = closing, -1 = invalid command
+ *******************************************************************************/
+int triggerGarage(String command) {
+
+  if (garageDoorState > 2 && command == "open") {
+
+    Serial.println("Opening garage door ...");
+
+    digitalWrite(garageTrigger, HIGH);
+    delay(200);
+    digitalWrite(garageTrigger, LOW);
+
+    return 1;
+
+  } else if (garageDoorState < 2 && command == "close") {
+
+    Serial.println("Closing garage door ...");
+
+    digitalWrite(garageTrigger, HIGH);
+    delay(200);
+    digitalWrite(garageTrigger, LOW);
+
+    return 0;
+
+  } else {
+
+    return -1;
+
+    }
+
+}
+
+
+ /*******************************************************************************
+  * Description    : Use of callback_wrapper has been deprecated but left in this example to confirm backwards compatibility.
+  * NOTE           : This wrapper is in charge of calling must be defined like this for the lib work
+  * Input          : None
+  * Output         : None
+  *******************************************************************************/
 void dht_wrapper() {
 
   DHT.isrCallback();
 
 }
 
-/*
- *
- */
+
+/*******************************************************************************
+ * Description    : Reads Temperature and Humidity of Sensor DHT22
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
 void readTempHumid() {
 
   // Check if we need to start the next sample
@@ -264,20 +496,20 @@ void readTempHumid() {
       }
 
     Serial.print("Humidity (%): ");
-    Serial.println(DHT.getHumidity(), 2);
-    Particle.publish("Humidity (%)", String(DHT.getHumidity(), 2));
-    dHumidity = (double) DHT.getHumidity();
+    Serial.println(DHT.getHumidity(), 1);
+    Particle.publish("Humidity (%)", String(DHT.getHumidity(), 1));
+    dHumidity = (double) (roundf((10.0*DHT.getHumidity()))/10.0);
 
     Serial.print("Temperature (°C): ");
-    Serial.println(DHT.getCelsius(), 2);
-    Particle.publish("Temperature (°C)", String(DHT.getCelsius(), 2));
-    dTemperature = (double) DHT.getCelsius();
+    Serial.println(DHT.getCelsius(), 1);
+    Particle.publish("Temperature (°C)", String(DHT.getCelsius(), 1));
+    dTemperature = (double) (roundf((10.0*DHT.getCelsius()))/10.0);
 
     //Serial.print("Temperature (°F): ");
-    //Serial.println(DHT.getFahrenheit(), 2);
+    //Serial.println(DHT.getFahrenheit(), 1);
 
     //Serial.print("Temperature (K): ");
-    //Serial.println(DHT.getKelvin(), 2);
+    //Serial.println(DHT.getKelvin(), 1);
 
     Serial.print("Dew Point (°C): ");
     Serial.println(DHT.getDewPoint());
@@ -294,99 +526,11 @@ void readTempHumid() {
 
 }
 
-void triggerGarage() {
-
-  digitalWrite(garageTrigger, HIGH);
-  delay(400);
-  digitalWrite(garageTrigger, LOW);
-
-}
-
-
-void takeMeasurements(int interval) {
-
-  if (millis() - previousMillisUs >= interval) {
-
-    // save the last time you blinked the LED
-    previousMillisUs = millis();
-
-    if (detectVehicle(1) == true) {
-
-      //Serial.println("Vehicle detected by sensor 1");
-      digitalWrite(statusLED, HIGH);
-      sensorDetect1 = true;
-
-    } else {
-
-      digitalWrite(statusLED, LOW);
-      sensorDetect1 = false;
-
-    }
-
-    if (detectVehicle(2) == true) {
-
-      //Serial.println("Vehicle detected by sensor 2");
-      sensorDetect2 = true;
-
-    } else {
-
-      sensorDetect2 = false;
-
-    }
-
-    //delay(500);
-
-  }
-
-
-
-}
-
-
-
-
-
 
 /*******************************************************************************
- * Function Name  : CheckStatus
- * Description    : Checks if Particle cloud is connected
- * Input          : None
- * Output         : Blue flashing LED every 5 seconds
- * Return         : None
- *******************************************************************************/
-void checkStatus(int interval) {
-
-  if ((millis() - previousMillis >= interval) && !Particle.connected()) {
-
-    // save the last time you blinked the LED
-    previousMillis = millis();
-
-    // if the LED is off turn it on and vice-versa:
-    if (ledState == LOW) {
-
-      ledState = HIGH;
-
-    } else {
-
-      ledState = LOW;
-
-    }
-
-    // set the LED with the ledState of the variable:
-    digitalWrite(statusLEDParticle, ledState);
-
-  }
-
-
-}
-
-
-/*******************************************************************************
- * Function Name  : updateTime
  * Description    : Request time synchronization from the Particle Cloud once a day
  * Input          : None
  * Output         : None
- * Return         : None
  *******************************************************************************/
 void updateTime() {
 
@@ -402,75 +546,39 @@ void updateTime() {
 }
 
 
-bool detectVehicle(int sensorNumber) {
+/*******************************************************************************
+ * Description    : Blinks any LED as disired w/o delay
+ * Input          : LED Pin defintion, Off-Time (ms), On-Time (ms)
+ * Output         : None
+ *******************************************************************************/
+void blinkLED(int pin, int off, int on) {
 
-  int distance;
+ int blinkPhase = millis() % (off + on);
 
-  if (sensorNumber == 1) {
+ if (blinkPhase < off) {
 
-    distance = sensorHight1 - measureDistance(sensorNumber);
+   digitalWrite(pin, LOW);
 
+ } else {
 
-  } else if (sensorNumber == 2) {
+   digitalWrite(pin, HIGH);
 
-    distance = sensorHight2 - measureDistance(sensorNumber);
-
-  }
-
-  if (distance >= vehicleHight) {
-
-    return true;
-
-  } else {
-
-    return false;
-
-  }
+ }
 
 }
 
 
-int measureDistance(int sensorNumber) {
+/*******************************************************************************
+ * Description    : Checks if Particle cloud is connected
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void checkCloudStatus() {
 
-  uint32_t distance, timeMeasurement, timeDistance;
+  if (!Particle.connected()) {
 
-  // Ausbreitungsgeschwindigkeit (in Luft) = 331,5 + (0,6 * Temp°C) speedOfSound = 331,5 + ( 0.6 * dTemperature);
-  //float speedOfSound = 331.5 + 0.6 * 22; // 22 °C
-  double speedOfSound = 331.5 + 0.6 * dTemperature; // 22 °C
-
-  // trigger the sensor by sending a HIGH pulse of 10 or more microseconds
-  digitalWrite(usTrigger, LOW);
-  delayMicroseconds(3);
-
-  // critical, time-sensitive code starts
-  //noInterrupts();
-
-  digitalWriteFast(usTrigger, HIGH);
-  delayMicroseconds(10);
-  digitalWriteFast(usTrigger, LOW);
-
-  if (sensorNumber == 1) {
-
-    timeMeasurement = pulseIn(usEcho1, HIGH);
-
-  } else if (sensorNumber == 2) {
-
-    timeMeasurement = pulseIn(usEcho2, HIGH);
+    blinkLED(statusLEDParticle,2000,100);
 
   }
-
-  // critical, time-sensitive code ends
-  //interrupts();
-
-  timeDistance = timeMeasurement / 2;
-  distance = speedOfSound * timeDistance * pow(10,-4); // in cm
-
-  //Serial.printf("Distance %i",sensorNumber);
-  //Serial.printf(": %i",distance);
-  //Serial.println();
-
-  // calclulate distance in cm
-  return distance;
-  delayMicroseconds(50);
 
 }
