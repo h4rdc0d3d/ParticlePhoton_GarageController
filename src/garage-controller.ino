@@ -6,6 +6,12 @@
  * License  : GNU General Public License v3+
 *******************************************************************************/
 
+// Particle Cloud Variables
+String sensorStatus = "Initialization";
+String firmwareVersion = "v0.2.1";   // Version MAJOR.MINOR.PATCH
+String vehicleInGarageCloud = "Initialization";
+String garageDoorStateCloud = "Initialization";
+
 // includings of 3rd party libraries
 // @todo: check necessary includings
 #include "PietteTech_DHT.h" // Temperature, Humidity Sensor Libray
@@ -34,8 +40,7 @@ STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 // globals
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
-String sensorStatus = "Initialization";
-String firmwareVersion = "0.2.0";   // Version MAJOR.MINOR.PATCH
+
 double dHumidity = 40.0;
 double dTemperature = 20.0;
 
@@ -49,6 +54,7 @@ bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
 
 int vehicleInGarage = 0;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
 int garageDoorState = 0;      // 0 = initialization, 1 = closed, 2 = transition, 3 = open
+
 
 // declaration of I/Os
 const int garageTrigger = A0;         // garage door trigger relay
@@ -89,11 +95,12 @@ void setup() {
   Serial.println("---------------");
 
   // particle variables
+  Particle.variable("FW-Version", firmwareVersion);
   Particle.variable("TempStatus", sensorStatus);
   Particle.variable("Temperature", &dTemperature, DOUBLE);
   Particle.variable("Humidity", &dHumidity, DOUBLE);
-  Particle.variable("garageDoorState", garageDoorState);
-  Particle.variable("vehicleState", vehicleInGarage);
+  Particle.variable("garageDoorState", garageDoorStateCloud);
+  Particle.variable("vehicleState", vehicleInGarageCloud);
 
   // particle functions
   Particle.function("garageTrigger", triggerGarage);
@@ -127,11 +134,13 @@ void setup() {
     // vehicle inside
 
     vehicleInGarage = 1;
+    vehicleInGarageCloud = "inside";
 
   } else if (sensorDetect1 == false && sensorDetect2 == false) {
     // vehicle outside
 
     vehicleInGarage = 3;
+    vehicleInGarageCloud = "outside";
 
   }
 
@@ -177,24 +186,28 @@ void readGarageDoorState() {
     // garage door open
 
     garageDoorState = 1; // 1 = garage door open
+    garageDoorStateCloud = "open";
     Serial.println("Garage door open");
 
   } else if (doorSwitchOpen == LOW && doorSwitchClosed == LOW && garageDoorState != 2) {
     // garage door in transition
 
     garageDoorState = 2; // 2 = garage door in transition
+    garageDoorStateCloud = "transition";
     Serial.println("Garage door in transition");
 
   } else if (doorSwitchOpen == LOW && doorSwitchClosed == HIGH && garageDoorState < 3) {
     // garage door closed
 
     garageDoorState = 3; // 3 = garage door closed
+    garageDoorStateCloud = "closed";
     Serial.println("Garage door closed");
 
   } else if (doorSwitchOpen == HIGH && doorSwitchClosed == HIGH && garageDoorState > 0) {
     // initialization
 
     garageDoorState = 0; // 0 = initialization
+    garageDoorStateCloud = "failure";
     // Error treatment to be defined
     Serial.println("Garage door failure!");
 
@@ -218,18 +231,21 @@ void readVehicleState() {
 
       //triggerGarage(0); <-- only if garage door shall close when vehcile is inside
       Serial.println("Vehicle inside");
+      vehicleInGarageCloud = "inside";
       vehicleInGarage--;
 
   } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
     // vehicle in transition
 
       Serial.println("Vehicle in transition");
+      vehicleInGarageCloud = "transition";
       vehicleInGarage++;
 
   } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
     // vehicle in transition
 
       Serial.println("Vehicle in transition");
+      vehicleInGarageCloud = "transition";
       vehicleInGarage--;
 
   } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
@@ -237,6 +253,7 @@ void readVehicleState() {
 
     triggerGarage("close");
     Serial.println("Vehicle outside");
+    vehicleInGarageCloud = "outside";
     vehicleInGarage++;
 
   } else {
