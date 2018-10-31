@@ -8,7 +8,7 @@
 
 // Particle Cloud Variables
 String sensorStatus = "Initialization";
-String firmwareVersion = "v0.2.2";   // Version MAJOR.MINOR.PATCH
+String firmwareVersion = "v0.2.3";   // Version MAJOR.MINOR.PATCH
 String vehicleInGarageCloud = "Initialization";
 String garageDoorStateCloud = "Initialization";
 
@@ -20,7 +20,7 @@ String garageDoorStateCloud = "Initialization";
 // @todo: check necessary defines
 #define DHTTYPE  AM2302              // Sensor type DHT11/21/22/AM2301/AM2302
 #define DHTPIN   D2           	    // Digital pin for communications
-#define DHT_SAMPLE_INTERVAL   600000  // Sample every ten minutes
+#define DHT_SAMPLE_INTERVAL   10*60*1000  // Sample every ten minutes
 
 /*******************************************************************************
  * Description    : Use of callback_wrapper has been deprecated but left in this example to confirm backwards compatibility.
@@ -40,6 +40,7 @@ STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 // globals
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
+bool bTempAlert = false;      // variable for toggeling Temperature alert state
 
 double dHumidity = 40.0;
 double dTemperature = 20.0;
@@ -77,7 +78,7 @@ unsigned long previousMillisVehicle = 0;                    // stores last time 
 unsigned long previousMillisUs = 0;                         // stores last time ultrasonic sensors were updated
 
 // Setup of timer for garage door notification
-Timer garageDoorTimer(10*60*1000, garageDoorNotification, true);   // notification after 15 min
+Timer garageDoorTimer(15*60*1000, garageDoorNotification, true);   // notification after 15 min
 
 
 /*******************************************************************************
@@ -570,6 +571,18 @@ void readTempHumid() {
 
     bDHTstarted = false;  // reset the sample flag so we can take another
     DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
+
+    }
+
+    // Manage alerts for low temperature
+    if (dTemperature < 20.0 && bTempAlert == false) {
+
+      temperatureNotification();
+      bTempAlert = true;
+
+    } else if (dTemperature >= 20.0 && bTempAlert == true) {
+
+      bTempAlert = false;
 
     }
 
