@@ -8,7 +8,7 @@
 
 // Particle Cloud Variables
 String sensorStatus = "Initialization";
-String firmwareVersion = "v0.2.1";   // Version MAJOR.MINOR.PATCH
+String firmwareVersion = "v0.2.3";   // Version MAJOR.MINOR.PATCH
 String vehicleInGarageCloud = "Initialization";
 String garageDoorStateCloud = "Initialization";
 
@@ -20,7 +20,7 @@ String garageDoorStateCloud = "Initialization";
 // @todo: check necessary defines
 #define DHTTYPE  AM2302              // Sensor type DHT11/21/22/AM2301/AM2302
 #define DHTPIN   D2           	    // Digital pin for communications
-#define DHT_SAMPLE_INTERVAL   600000  // Sample every ten minutes
+#define DHT_SAMPLE_INTERVAL   10*60*1000  // Sample every ten minutes
 
 /*******************************************************************************
  * Description    : Use of callback_wrapper has been deprecated but left in this example to confirm backwards compatibility.
@@ -40,6 +40,7 @@ STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 // globals
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
+bool bTempAlert = false;      // variable for toggeling Temperature alert state
 
 double dHumidity = 40.0;
 double dTemperature = 20.0;
@@ -53,7 +54,7 @@ bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
 bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
 
 int vehicleInGarage = 0;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
-int garageDoorState = 0;      // 0 = initialization, 1 = closed, 2 = transition, 3 = open
+int garageDoorState = 2;      // 0 = initialization, 1 = closed, 2 = transition, 3 = open
 
 
 // declaration of I/Os
@@ -71,12 +72,13 @@ const int statusLEDVehicle = D7;      // status LED for signalling if vehcile de
 unsigned long lastSync = millis();                    // last synchronization of time in internet
 unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
 
-
 // Generally, you should use "unsigned long" for variables that hold time
 // The value will quickly become too large for an int to store
-unsigned long previousMillisVehicle = 0;        // will store last time LED was updated
-unsigned long previousMillisUs = 0;        // will store last time ultrasonic sensors were updated
+unsigned long previousMillisVehicle = 0;                    // stores last time vehicle was detected --> NOTE: currently NOT used!
+unsigned long previousMillisUs = 0;                         // stores last time ultrasonic sensors were updated
 
+// Setup of timer for garage door notification
+Timer garageDoorTimer(15*60*1000, garageDoorNotification, true);   // notification after 15 min
 
 
 /*******************************************************************************
@@ -189,12 +191,18 @@ void readGarageDoorState() {
     garageDoorStateCloud = "open";
     Serial.println("Garage door open");
 
+    // start timer for notification threshold
+    garageDoorTimer.start();
+
   } else if (doorSwitchOpen == LOW && doorSwitchClosed == LOW && garageDoorState != 2) {
     // garage door in transition
 
     garageDoorState = 2; // 2 = garage door in transition
     garageDoorStateCloud = "transition";
     Serial.println("Garage door in transition");
+
+    // stop timer for notification threshold
+    garageDoorTimer.stop();
 
   } else if (doorSwitchOpen == LOW && doorSwitchClosed == HIGH && garageDoorState < 3) {
     // garage door closed
@@ -203,15 +211,38 @@ void readGarageDoorState() {
     garageDoorStateCloud = "closed";
     Serial.println("Garage door closed");
 
-  } else if (doorSwitchOpen == HIGH && doorSwitchClosed == HIGH && garageDoorState > 0) {
-    // initialization
+  } else if (doorSwitchOpen == HIGH && doorSwitchClosed == HIGH) {
+    // Sensor failure
 
-    garageDoorState = 0; // 0 = initialization
-    garageDoorStateCloud = "failure";
+    garageDoorStateCloud = "Sensor failure";
     // Error treatment to be defined
     Serial.println("Garage door failure!");
 
   }
+
+}
+
+
+/*******************************************************************************
+ * Description    : Notifies user about a left open garage door (see threshold)
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void garageDoorNotification() {
+
+  Particle.publish("GarageDoor", "Alert");
+
+}
+
+
+/*******************************************************************************
+ * Description    : Notifies user about low temperature (see threshold)
+ * Input          : None
+ * Output         : None
+ *******************************************************************************/
+void temperatureNotification() {
+
+  Particle.publish("Temperature", "Alert");
 
 }
 
@@ -232,21 +263,24 @@ void readVehicleState() {
       //triggerGarage(0); <-- only if garage door shall close when vehcile is inside
       Serial.println("Vehicle inside");
       vehicleInGarageCloud = "inside";
-      vehicleInGarage--;
+      vehicleInGarage = 1;
+      Serial.println(vehicleInGarage);
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage != 2) {
     // vehicle in transition
 
       Serial.println("Vehicle in transition");
       vehicleInGarageCloud = "transition";
-      vehicleInGarage++;
+      vehicleInGarage = 2;
+      Serial.println(vehicleInGarage);
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage != 2) {
     // vehicle in transition
 
       Serial.println("Vehicle in transition");
       vehicleInGarageCloud = "transition";
-      vehicleInGarage--;
+      vehicleInGarage = 2;
+      Serial.println(vehicleInGarage);
 
   } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
     // vehicle outside
@@ -254,7 +288,8 @@ void readVehicleState() {
     triggerGarage("close");
     Serial.println("Vehicle outside");
     vehicleInGarageCloud = "outside";
-    vehicleInGarage++;
+    vehicleInGarage = 3;
+    Serial.println(vehicleInGarage);
 
   } else {
 
@@ -536,6 +571,18 @@ void readTempHumid() {
 
     bDHTstarted = false;  // reset the sample flag so we can take another
     DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
+
+    }
+
+    // Manage alerts for low temperature
+    if (dTemperature < 20.0 && bTempAlert == false) {
+
+      temperatureNotification();
+      bTempAlert = true;
+
+    } else if (dTemperature >= 20.0 && bTempAlert == true) {
+
+      bTempAlert = false;
 
     }
 
