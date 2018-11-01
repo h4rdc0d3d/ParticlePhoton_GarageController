@@ -8,7 +8,7 @@
 
 // Particle Cloud Variables
 String sensorStatus = "Initialization";
-String firmwareVersion = "v0.2.3";   // Version MAJOR.MINOR.PATCH
+String firmwareVersion = "v0.2.4";   // Version MAJOR.MINOR.PATCH
 String vehicleInGarageCloud = "Initialization";
 String garageDoorStateCloud = "Initialization";
 
@@ -41,13 +41,14 @@ STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
 bool bTempAlert = false;      // variable for toggeling Temperature alert state
+bool bAutomaticDoorOperation = true;    // variable for setting automatic door mode (true = activated, false = deactivated)
 
 double dHumidity = 40.0;
 double dTemperature = 20.0;
 
 
-const int sensorHight1 = 13;  // hight of mounted sensor 1 in cm
-const int sensorHight2 = 13;  // hight of mounted sensor 2 in cm
+const int sensorHight1 = 14;  // hight of mounted sensor 1 in cm
+const int sensorHight2 = 14;  // hight of mounted sensor 2 in cm
 const int vehicleHight = 5;  // hight of vehicle to detect in cm
 
 bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
@@ -67,15 +68,14 @@ const int doorSensor2 = D1;           // garage door sensor2 (HIGH = door closed
 const int statusLEDParticle = D6;     // status LED for signalling Particle Cloud errors
 const int statusLEDVehicle = D7;      // status LED for signalling if vehcile detected with sensor 1
 
-
 // Declaration of time variables
 unsigned long lastSync = millis();                    // last synchronization of time in internet
-unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
+unsigned long previousMillisVehicle = millis();                    // stores last time vehicle was detected --> NOTE: currently NOT used!
+unsigned long previousMillisUs = millis();                         // stores last time ultrasonic sensors were updated
 
-// Generally, you should use "unsigned long" for variables that hold time
-// The value will quickly become too large for an int to store
-unsigned long previousMillisVehicle = 0;                    // stores last time vehicle was detected --> NOTE: currently NOT used!
-unsigned long previousMillisUs = 0;                         // stores last time ultrasonic sensors were updated
+// Declaration of time constants
+unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
+unsigned long vehicleDetectionThreshold = 10*1000;       // threshold for vehicle detection --> NOTE: currently NOT used!
 
 // Setup of timer for garage door notification
 Timer garageDoorTimer(15*60*1000, garageDoorNotification, true);   // notification after 15 min
@@ -106,6 +106,7 @@ void setup() {
 
   // particle functions
   Particle.function("garageTrigger", triggerGarage);
+  Particle.function("automaticMode", automaticMode);
 
   // Definition of I/O-Pins
   pinMode(garageTrigger, OUTPUT);
@@ -214,6 +215,7 @@ void readGarageDoorState() {
   } else if (doorSwitchOpen == HIGH && doorSwitchClosed == HIGH) {
     // Sensor failure
 
+    bAutomaticDoorOperation = false; // deactivating automatic door mode, to be activated manually afterwards
     garageDoorStateCloud = "Sensor failure";
     // Error treatment to be defined
     Serial.println("Garage door failure!");
@@ -266,16 +268,16 @@ void readVehicleState() {
       vehicleInGarage = 1;
       Serial.println(vehicleInGarage);
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage != 2) {
-    // vehicle in transition
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
+    // vehicle in transition --> leaving
 
       Serial.println("Vehicle in transition");
       vehicleInGarageCloud = "transition";
       vehicleInGarage = 2;
       Serial.println(vehicleInGarage);
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage != 2) {
-    // vehicle in transition
+  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
+    // vehicle in transition <-- entering
 
       Serial.println("Vehicle in transition");
       vehicleInGarageCloud = "transition";
@@ -311,21 +313,22 @@ void takeMeasurements(int interval) {
     // save the last time a measurement was taken
     previousMillisUs = millis();
 
+    // Sensor 1 = vehicle inside garage
     if (detectVehicle(1) == true) {
 
       digitalWrite(statusLEDVehicle, HIGH);
       sensorDetect1 = true;
 
-    }  else {
+    } else {
 
       digitalWrite(statusLEDVehicle, LOW);
       sensorDetect1 = false;
 
     }
 
+    // Sensor 2 = vehicle in transition (leaving / entering garage)
     if (detectVehicle(2) == true) {
 
-      //Serial.println("Vehicle detected by sensor 2");
       sensorDetect2 = true;
 
     } else {
@@ -433,7 +436,7 @@ int measureDistance(int sensorNumber) {
  *******************************************************************************/
 int triggerGarage(String command) {
 
-  if (garageDoorState > 2 && command == "open") {
+  if (bAutomaticDoorOperation == true && garageDoorState > 2 && command == "open") {
 
     Serial.println("Opening garage door ...");
 
@@ -443,7 +446,7 @@ int triggerGarage(String command) {
 
     return 1;
 
-  } else if (garageDoorState < 2 && command == "close") {
+  } else if (bAutomaticDoorOperation == true && garageDoorState < 2 && command == "close") {
 
     Serial.println("Closing garage door ...");
 
@@ -458,6 +461,40 @@ int triggerGarage(String command) {
     return -1;
 
     }
+
+}
+
+
+/*******************************************************************************
+ * Description    : Setting mode for automatic opening / closing the garage door
+ * Input          : on / off / status
+ * Output         : 1 = activated, 0 = deactivated
+ *******************************************************************************/
+int automaticMode(String command) {
+
+  if (command == "on") {
+
+    bAutomaticDoorOperation = true;
+    return 1;
+
+  } else if (command == "off") {
+
+    bAutomaticDoorOperation = false;
+    return 0;
+
+  } else if (command == "status") {
+
+    if (bAutomaticDoorOperation) {
+      return 1;
+    } else {
+      return 0;
+    }
+
+  } else {
+
+    return -1;
+
+  }
 
 }
 
