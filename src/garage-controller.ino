@@ -288,7 +288,7 @@ void readVehicleState() {
     digitalWrite(statusLEDVehicle,LOW);
 
     // close garage door immediately when vehicle is leaving the garage
-    If (bAutomaticDoorOperation) {
+    if (bAutomaticDoorOperation) {
       triggerGarage("close");
     }
 
