@@ -8,7 +8,7 @@
 
 // Particle Cloud Variables
 String sensorStatus = "Initialization";
-String firmwareVersion = "v0.2.6";   // Version MAJOR.MINOR.PATCH
+String firmwareVersion = "v0.2.9";   // Version MAJOR.MINOR.PATCH
 String vehicleInGarageCloud = "Initialization";
 String garageDoorStateCloud = "Initialization";
 
@@ -38,7 +38,7 @@ PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 
 // globals
-int DHTnextSampleTime;	    // Next time we want to start sample
+int DHTnextSampleTime = 0;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
 bool bTempAlert = false;      // variable for toggeling Temperature alert state
 bool bAutomaticDoorOperation = false;    // variable for setting automatic door mode (true = activated, false = deactivated)
@@ -47,37 +47,34 @@ double dHumidity = 40.0;
 double dTemperature = 20.0;
 
 
-const int sensorHight1 = 150;  // hight of mounted sensor 1 in cm
-const int sensorHight2 = 150;  // hight of mounted sensor 2 in cm
-const int vehicleHight = 120;  // hight of vehicle to detect in cm
+const int sensorHight = 200;  // hight of mounted sensor 1 in cm
+const int vehicleHight = 30;  // hight of vehicle to detect in cm
 
-bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
-bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
+bool sensorDetect = false;   // status of detected vehicle for ultrasonic sensor
 
-int vehicleInGarage = 0;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
+int vehicleInGarage = 2;      // 0 = initialization, 1 = inside garage, 2 = transition, 3 = outside in garage
 int garageDoorState = 2;      // 0 = initialization, 1 = closed, 2 = transition, 3 = open
 
 
 // declaration of I/Os
 const int garageTrigger = A0;         // garage door trigger relay
 const int usTrigger = D3;             // trigger signal for ultrasonic sensors
-const int usEcho1 = D4;               // echo signal for ultrasonic sensor 1
-const int usEcho2 = D5;               // echo signal for ultrasonic sensor 2
+const int usEcho = D4;               // echo signal for ultrasonic sensor 1
 const int doorSensor1 = D0;           // garage door sensor1 (HIGH = door open)
 const int doorSensor2 = D1;           // garage door sensor2 (HIGH = door closed)
 const int statusLEDParticle = D6;     // status LED for signalling Particle Cloud errors
 const int statusLEDVehicle = D7;      // status LED for signalling if vehcile detected with sensor 1
 
-const float tempOffset = 4.0;         // temperat offset
+const float tempOffset = 4.7;         // temperat offset
 
 // Declaration of time variables
 unsigned long lastSync = millis();                    // last synchronization of time in internet
-unsigned long previousMillisVehicle = millis();                    // stores last time vehicle was detected --> NOTE: currently NOT used!
+unsigned long previousMillisVehicle = millis();                    // stores last time vehicle was detected
 unsigned long previousMillisUs = millis();                         // stores last time ultrasonic sensors were updated
 
 // Declaration of time constants
 unsigned long ONE_DAY_MILLIS (24 * 60 * 60 * 1000);   // 24 hours
-unsigned long vehicleDetectionThreshold = 10*1000;       // threshold for vehicle detection --> NOTE: currently NOT used!
+unsigned long vehicleDetectionThreshold (60 * 1000);       // threshold of 60s for vehicle detection
 
 // Setup of timer for garage door notification
 Timer garageDoorTimer(15*60*1000, garageDoorNotification, true);   // notification after 15 min
@@ -115,22 +112,17 @@ void setup() {
   pinMode(statusLEDVehicle, OUTPUT);
   pinMode(statusLEDParticle, OUTPUT);
 
-  // setting trigger pin
+  // setting trigger and echo pin
   pinMode(usTrigger, OUTPUT);
-  digitalWriteFast(usTrigger, LOW);
+  pinMode(usEcho, INPUT);
 
-  // setting echo pins
-  pinMode(usEcho1, INPUT);
-  pinMode(usEcho2, INPUT);
-
-  //setting door switch pins
+  //setting door sensor pins
   pinMode(doorSensor1, INPUT_PULLDOWN);
   pinMode(doorSensor2, INPUT_PULLDOWN);
 
-  DHTnextSampleTime = 0;  // Start the first sample immediately
-
-  // setting garage trigger to low during initialization
+  // setting trigger pins to low during initialization
   digitalWrite(garageTrigger, LOW);
+  digitalWriteFast(usTrigger, LOW);
 
   // take first measurements
   //takeMeasurements(500);
@@ -262,42 +254,43 @@ void readVehicleState() {
   // takes ultrasonic measurements (int sample time in ms)
   takeMeasurements(500);
 
-  if (sensorDetect1 == true && sensorDetect2 == false && vehicleInGarage > 1) {
-    // vehicle inside
+  if (sensorDetect == true && vehicleInGarage > 1) {
+    // vehcile detected
 
-      //triggerGarage(0); <-- only if garage door shall close when vehcile is inside
-      Serial.println("Vehicle inside");
+    if (vehicleInGarage == 3) {
+
+      // resets the timer
+      previousMillisVehicle = millis();
+
+    }
+
+    if (millis() - previousMillisVehicle < vehicleDetectionThreshold) {
+      // vehicle just arrived
+
+      vehicleInGarageCloud = "transition";
+      vehicleInGarage = 2;
+      blinkLED(statusLEDVehicle,500,500);
+
+    } else {
+      // vehicle inside garage
+
       vehicleInGarageCloud = "inside";
       vehicleInGarage = 1;
-      Serial.println(vehicleInGarage);
+      digitalWrite(statusLEDVehicle,HIGH);
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage < 2) {
-    // vehicle in transition --> leaving
+    }
 
-      Serial.println("Vehicle in transition");
-      vehicleInGarageCloud = "transition";
-      vehicleInGarage = 2;
-      Serial.println(vehicleInGarage);
+  } else if (sensorDetect == false && vehicleInGarage < 3) {
+    // no vehicle detected
 
-  } else if (sensorDetect1 == false && sensorDetect2 == true && vehicleInGarage > 2) {
-    // vehicle in transition <-- entering
-
-      Serial.println("Vehicle in transition");
-      vehicleInGarageCloud = "transition";
-      vehicleInGarage = 2;
-      Serial.println(vehicleInGarage);
-
-  } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
-    // vehicle outside
-
-    //triggerGarage("close");
-    Serial.println("Vehicle outside");
     vehicleInGarageCloud = "outside";
     vehicleInGarage = 3;
-    Serial.println(vehicleInGarage);
+    digitalWrite(statusLEDVehicle,LOW);
 
-  } else {
-
+    // close garage door immediately when vehicle is leaving the garage
+    If (bAutomaticDoorOperation) {
+      triggerGarage("close");
+    }
 
   }
 
@@ -305,7 +298,7 @@ void readVehicleState() {
 
 
 /*******************************************************************************
- * Description    : Takes ultrasonic measurements for both sensors
+ * Description    : Takes ultrasonic measurements
  * Input          : None
  * Output         : None
  *******************************************************************************/
@@ -317,58 +310,32 @@ void takeMeasurements(int interval) {
     previousMillisUs = millis();
 
     // Sensor 1 = vehicle inside garage
-    if (detectVehicle(1) == true) {
+    if (detectVehicle() == true) {
+      // vehicle in garage
 
-      digitalWrite(statusLEDVehicle, HIGH);
-      sensorDetect1 = true;
-
-    } else {
-
-      digitalWrite(statusLEDVehicle, LOW);
-      sensorDetect1 = false;
-
-    }
-
-    /*
-    // Sensor 2 = vehicle in transition (leaving / entering garage)
-    if (detectVehicle(2) == true) {
-
-      sensorDetect2 = true;
+      //digitalWrite(statusLEDVehicle, HIGH);
+      sensorDetect = true;
 
     } else {
 
-      sensorDetect2 = false;
+      //digitalWrite(statusLEDVehicle, LOW);
+      sensorDetect = false;
 
     }
-    */
-
-    //delay(500);
 
   }
-
-
 
 }
 
 
 /*******************************************************************************
  * Description    : Checks the presence of a vehcile in the garage
- * Input          : Sensor Number
+ * Input          : None
  * Output         : TRUE (vehicle detected), FALSE (no vehicle detected)
  *******************************************************************************/
-bool detectVehicle(int sensorNumber) {
+bool detectVehicle() {
 
-  int distance;
-
-  if (sensorNumber == 1) {
-
-    distance = sensorHight1 - measureDistance(sensorNumber);
-
-  } else if (sensorNumber == 2) {
-
-    distance = sensorHight2 - measureDistance(sensorNumber);
-
-  }
+  int distance = sensorHight - measureDistance();
 
   if (distance >= vehicleHight) {
 
@@ -388,7 +355,7 @@ bool detectVehicle(int sensorNumber) {
  * Input          : Sensor Number
  * Output         : Distance (cm)
  *******************************************************************************/
-int measureDistance(int sensorNumber) {
+int measureDistance() {
 
   uint32_t distance, timeMeasurement, timeDistance;
 
@@ -407,15 +374,8 @@ int measureDistance(int sensorNumber) {
   delayMicroseconds(10);
   digitalWriteFast(usTrigger, LOW);
 
-  if (sensorNumber == 1) {
-
-    timeMeasurement = pulseIn(usEcho1, HIGH);
-
-  } else if (sensorNumber == 2) {
-
-    timeMeasurement = pulseIn(usEcho2, HIGH);
-
-  }
+  // take ulrasonic measurement
+  timeMeasurement = pulseIn(usEcho, HIGH);
 
   // critical, time-sensitive code ends
   //interrupts();
@@ -441,22 +401,22 @@ int measureDistance(int sensorNumber) {
  *******************************************************************************/
 int triggerGarage(String command) {
 
-  if (bAutomaticDoorOperation == true && garageDoorState > 2 && command == "open") {
+  if (garageDoorState > 2 && command == "open") {
 
     Serial.println("Opening garage door ...");
 
     digitalWrite(garageTrigger, HIGH);
-    delay(200);
+    delay(500);
     digitalWrite(garageTrigger, LOW);
 
     return 1;
 
-  } else if (bAutomaticDoorOperation == true && garageDoorState < 2 && command == "close") {
+  } else if (garageDoorState < 2 && command == "close") {
 
     Serial.println("Closing garage door ...");
 
     digitalWrite(garageTrigger, HIGH);
-    delay(200);
+    delay(500);
     digitalWrite(garageTrigger, LOW);
 
     return 0;
@@ -473,7 +433,7 @@ int triggerGarage(String command) {
 /*******************************************************************************
  * Description    : Setting mode for automatic opening / closing the garage door
  * Input          : on / off / status
- * Output         : 1 = activated, 0 = deactivated
+ * Output         : 1 = activated, 0 = deactivated, -1 = invalid command
  *******************************************************************************/
 int automaticMode(String command) {
 
