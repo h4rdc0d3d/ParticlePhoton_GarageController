@@ -8,7 +8,7 @@
 
 // Particle Cloud Variables
 String sensorStatus = "Initialization";
-String firmwareVersion = "v0.2.4";   // Version MAJOR.MINOR.PATCH
+String firmwareVersion = "v0.2.6";   // Version MAJOR.MINOR.PATCH
 String vehicleInGarageCloud = "Initialization";
 String garageDoorStateCloud = "Initialization";
 
@@ -41,15 +41,15 @@ STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 int DHTnextSampleTime;	    // Next time we want to start sample
 bool bDHTstarted;		    // flag to indicate we started acquisition
 bool bTempAlert = false;      // variable for toggeling Temperature alert state
-bool bAutomaticDoorOperation = true;    // variable for setting automatic door mode (true = activated, false = deactivated)
+bool bAutomaticDoorOperation = false;    // variable for setting automatic door mode (true = activated, false = deactivated)
 
 double dHumidity = 40.0;
 double dTemperature = 20.0;
 
 
-const int sensorHight1 = 14;  // hight of mounted sensor 1 in cm
-const int sensorHight2 = 14;  // hight of mounted sensor 2 in cm
-const int vehicleHight = 5;  // hight of vehicle to detect in cm
+const int sensorHight1 = 150;  // hight of mounted sensor 1 in cm
+const int sensorHight2 = 150;  // hight of mounted sensor 2 in cm
+const int vehicleHight = 120;  // hight of vehicle to detect in cm
 
 bool sensorDetect1 = false;   // status of detected vehicle for sensor 1
 bool sensorDetect2 = false;   // status of detected vehicle for sensor 2
@@ -67,6 +67,8 @@ const int doorSensor1 = D0;           // garage door sensor1 (HIGH = door open)
 const int doorSensor2 = D1;           // garage door sensor2 (HIGH = door closed)
 const int statusLEDParticle = D6;     // status LED for signalling Particle Cloud errors
 const int statusLEDVehicle = D7;      // status LED for signalling if vehcile detected with sensor 1
+
+const float tempOffset = 4.0;         // temperat offset
 
 // Declaration of time variables
 unsigned long lastSync = millis();                    // last synchronization of time in internet
@@ -131,8 +133,8 @@ void setup() {
   digitalWrite(garageTrigger, LOW);
 
   // take first measurements
-  takeMeasurements(500);
-
+  //takeMeasurements(500);
+  /*
   if (sensorDetect1 == true && sensorDetect2 == false) {
     // vehicle inside
 
@@ -146,6 +148,7 @@ void setup() {
     vehicleInGarageCloud = "outside";
 
   }
+  */
 
 }
 
@@ -287,7 +290,7 @@ void readVehicleState() {
   } else if (sensorDetect1 == false && sensorDetect2 == false && vehicleInGarage < 3) {
     // vehicle outside
 
-    triggerGarage("close");
+    //triggerGarage("close");
     Serial.println("Vehicle outside");
     vehicleInGarageCloud = "outside";
     vehicleInGarage = 3;
@@ -326,6 +329,7 @@ void takeMeasurements(int interval) {
 
     }
 
+    /*
     // Sensor 2 = vehicle in transition (leaving / entering garage)
     if (detectVehicle(2) == true) {
 
@@ -336,6 +340,7 @@ void takeMeasurements(int interval) {
       sensorDetect2 = false;
 
     }
+    */
 
     //delay(500);
 
@@ -485,9 +490,13 @@ int automaticMode(String command) {
   } else if (command == "status") {
 
     if (bAutomaticDoorOperation) {
+
       return 1;
+
     } else {
+
       return 0;
+
     }
 
   } else {
@@ -586,13 +595,13 @@ void readTempHumid() {
 
     Serial.print("Humidity (%): ");
     Serial.println(DHT.getHumidity(), 1);
-    Particle.publish("Humidity (%)", String(DHT.getHumidity(), 1));
+    //Particle.publish("Humidity (%)", String(DHT.getHumidity(), 1));
     dHumidity = (double) (roundf((10.0*DHT.getHumidity()))/10.0);
 
     Serial.print("Temperature (°C): ");
-    Serial.println(DHT.getCelsius(), 1);
-    Particle.publish("Temperature (°C)", String(DHT.getCelsius(), 1));
-    dTemperature = (double) (roundf((10.0*DHT.getCelsius()))/10.0);
+    Serial.println((DHT.getCelsius()-tempOffset), 1);
+    //Particle.publish("Temperature (°C)", String((DHT.getCelsius()-tempOffset), 1));
+    dTemperature = (double) (roundf((10.0*(DHT.getCelsius()-tempOffset)))/10.0);
 
     //Serial.print("Temperature (°F): ");
     //Serial.println(DHT.getFahrenheit(), 1);
@@ -612,12 +621,12 @@ void readTempHumid() {
     }
 
     // Manage alerts for low temperature
-    if (dTemperature < 20.0 && bTempAlert == false) {
+    if (dTemperature < 3.0 && bTempAlert == false) {
 
       temperatureNotification();
       bTempAlert = true;
 
-    } else if (dTemperature >= 20.0 && bTempAlert == true) {
+    } else if (dTemperature >= 5.0 && bTempAlert == true) {
 
       bTempAlert = false;
 
@@ -676,9 +685,24 @@ void blinkLED(int pin, int off, int on) {
  *******************************************************************************/
 void checkCloudStatus() {
 
-  if (!Particle.connected()) {
+  if (WiFi.ready()) {
 
-    blinkLED(statusLEDParticle,2000,100);
+    if (Particle.connected()) {
+
+      // connection to particle backend established
+      blinkLED(statusLEDParticle,5000,100);
+
+    } else {
+
+      // connection to particle backend not established
+      blinkLED(statusLEDParticle,1000,100);
+
+    }
+
+  } else if (!WiFi.ready()) {
+
+    // wifi connection not established
+    blinkLED(statusLEDParticle,500,500);
 
   }
 
