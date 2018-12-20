@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Project  : GarageController
  * Hardware : Particle Photon
- * Date     : 28.10.2018
+ * Date     : 20.12.2018
  * Author   : Tim Hornikel
  * License  : GNU General Public License v3+
 *******************************************************************************/
@@ -123,24 +123,6 @@ void setup() {
   // setting trigger pins to low during initialization
   digitalWrite(garageTrigger, LOW);
   digitalWriteFast(usTrigger, LOW);
-
-  // take first measurements
-  //takeMeasurements(500);
-  /*
-  if (sensorDetect1 == true && sensorDetect2 == false) {
-    // vehicle inside
-
-    vehicleInGarage = 1;
-    vehicleInGarageCloud = "inside";
-
-  } else if (sensorDetect1 == false && sensorDetect2 == false) {
-    // vehicle outside
-
-    vehicleInGarage = 3;
-    vehicleInGarageCloud = "outside";
-
-  }
-  */
 
 }
 
